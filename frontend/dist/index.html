@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SiYuan-zhCN-proofread · 思源简中校对</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div id="app">
+  <div>
+    <span class="hint">双击校对列编辑；行尾 ↺ 还原；编辑后点「保存」写入数据库</span>
+  </div>
+
+  <!-- 表格：列随数据渐进显示 -->
+  <div class="table-wrap" ref="v_scrollEl" @scroll="onScroll">
+    <div class="thead" :style="{gridTemplateColumns: v_gridCols}">
+      <div>key</div>
+      <div v-if="v_hasTw">zh-TW</div>
+      <template v-if="v_hasOfficial">
+        <div>官方简中</div>
+        <div>校对（双击编辑）</div>
+      </template>
+      <div></div>
+    </div>
+    <div class="tbody" :style="{height: v_totalHeight + 'px'}" v-if="v_filtered.length">
+      <div v-for="v_row in v_viewRows" :key="v_row.key"
+           class="row" :class="rowClass(v_row)"
+           :style="{top: v_row._top + 'px', height: v_row._h + 'px', gridTemplateColumns: v_gridCols}">
+        <div class="cell key" :title="v_row.key" v-html="cellHtml(v_row, v_row.display)"></div>
+        <div class="cell tw" v-if="v_hasTw" :title="v_row.zh_tw || ''" v-html="cellHtml(v_row, v_row.zh_tw)"></div>
+        <template v-if="v_hasOfficial">
+          <div class="cell off" :title="officialTip(v_row)" v-html="cellHtml(v_row, v_row.official_cn)"></div>
+          <div class="cell fix" @dblclick="startEdit(v_row)" v-html="fixCellHtml(v_row)"></div>
+        </template>
+        <div class="restore" title="还原为官方值" v-if="curFix(v_row) !== null" @click="restoreRow(v_row)">↺</div>
+        <div v-else></div>
+        <textarea v-if="v_editKey === v_row.key" class="edit-box" ref="v_editBox"
+                  v-model="v_editText" @keydown.enter.prevent="commitEdit"
+                  @keydown.esc.stop.prevent="cancelEdit" @blur="commitEdit"></textarea>
+      </div>
+    </div>
+    <div class="empty-tip" v-else>
+      <template v-if="!v_rows.length">请先「导入zh-TW.json」（可选参照），再「导入官方zh-CN.json」开始校对；已有校对成果会在导入时自动合并</template>
+      <template v-else>没有符合当前过滤条件的行</template>
+    </div>
+  </div>
+
+  <!-- 状态条 -->
+  <div class="statusbar">
+    <span>共 {{ v_rows.length }}</span>
+    <span v-if="v_search || v_onlyNew || v_onlyPending">命中 <span class="hit">{{ v_filtered.length }}</span></span>
+    <span>已改 <span class="hit">{{ v_dirty.size }}</span></span>
+    <span>待核对 {{ v_pendingCount }}</span>
+    <label><input type="checkbox" v-model="v_onlyNew"> 只显示新增行</label>
+    <label><input type="checkbox" v-model="v_onlyPending"> 只显示待核对</label>
+    <label><input type="checkbox" v-model="v_showObsolete"> 显示已废弃</label>
+    <button class="link-btn" v-if="v_search || v_onlyNew || v_onlyPending || v_batchKeys" @click="clearFilter">清除过滤</button>
+    <span class="spacer"></span>
+    <button class="link-btn" v-if="v_batchUndo.size" @click="undoBatch">还原本次替换（{{ v_batchUndo.size }}行）</button>
+  </div>
+
+  <!-- 按钮两行 -->
+  <div class="btnrow right">
+    <button class="btn" @click="pickFile('tw')">导入zh-TW.json</button>
+    <button class="btn" @click="pickFile('official')">导入官方zh-CN.json</button>
+    <input type="file" ref="v_fileEl" style="display:none" accept=".json" @change="onFile">
+  </div>
+  <div class="btnrow">
+    <span>查找:</span>
+    <input id="searchbox" ref="v_searchEl" v-model="v_searchInput" @keydown.enter="doSearch" placeholder="输入后回车，全表查 key / 简中 / 繁中">
+    <button class="btn" @click="doSearch">查找</button>
+    <button class="btn primary" :class="{ unsaved: v_dirty.size }" @click="save">{{ v_dirty.size ? '保存 (' + v_dirty.size + ')' : '保存' }}</button>
+    <button class="btn" @click="openReplace">批量替换</button>
+    <button class="btn warn" @click="doExport">导出校对结果</button>
+  </div>
+
+  <!-- 批量替换弹窗 -->
+  <div class="mask" v-if="v_modal.replace">
+    <div class="modal">
+      <h3>批量替换</h3>
+      <div class="form-line"><label>查找:</label><input type="text" v-model="v_rep.src" placeholder="如：页签"></div>
+      <div class="form-line"><label>替换为:</label><input type="text" v-model="v_rep.dst" placeholder="如：标签页"></div>
+      <div class="form-line">
+        <label style="width:auto">历史:</label>
+        <select v-model="v_rep.src" @change="v_rep.dst = (v_histMap[v_rep.src] || v_rep.dst)">
+          <option value="">— 选择历史 —</option>
+          <option v-for="v_hist in v_replaceHistory" :key="v_hist.src" :value="v_hist.src">{{ v_hist.src }} → {{ v_hist.dst }}</option>
+        </select>
+        <label style="width:auto"><input type="checkbox" v-model="v_rep.cs"> 区分大小写</label>
+      </div>
+      <div class="kv" v-if="v_repPreview.length">将影响 <b>{{ v_repPreview.length }}</b> 行（替换后需核对，点「保存」才入库）</div>
+      <div class="preview-list" v-if="v_repPreview.length">
+        <div class="p-item" v-for="v_prev in v_repPreview.slice(0, 100)">
+          {{ v_prev.display }}: <span class="del">{{ v_prev.before }}</span> → <span class="ins">{{ v_prev.after }}</span>
+        </div>
+        <div class="p-item" v-if="v_repPreview.length > 100" style="color:#999">… 其余 {{ v_repPreview.length - 100 }} 行</div>
+      </div>
+      <div class="foot">
+        <button class="btn" @click="v_modal.replace=false">取消</button>
+        <button class="btn" v-if="v_rep.src" @click="v_repPreview = computeRepPreview()">预览影响行</button>
+        <button class="btn primary" @click="applyReplace">全部替换</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- sync 摘要弹窗 -->
+  <div class="mask" v-if="v_modal.sync">
+    <div class="modal">
+      <h3>官方版本同步完成</h3>
+      <div class="kv">新增 <b>{{ v_syncSummary.added }}</b> 行，废弃 <b>{{ v_syncSummary.removed }}</b> 行，官方值变更 <b>{{ v_syncSummary.changed }}</b> 行</div>
+      <template v-if="v_syncSummary.renamed.length">
+        <div class="kv" style="margin-top:10px">疑似改名（值完全相同），可一键迁移校对值：</div>
+        <div class="mig-item" v-for="v_pair in v_syncSummary.renamed">
+          <code>{{ disp(v_pair.from) }}</code> → <code>{{ disp(v_pair.to) }}</code>
+          <button class="btn" style="height:24px;padding:0 8px" @click="migrateFix(v_pair)">迁移 fix_cn</button>
+        </div>
+      </template>
+      <div class="foot"><button class="btn primary" @click="v_modal.sync=false">知道了</button></div>
+    </div>
+  </div>
+
+  <!-- 导出摘要弹窗 -->
+  <div class="mask" v-if="v_modal.export">
+    <div class="modal">
+      <h3>导出完成</h3>
+      <div class="kv">文件：<b>{{ v_exportResult.out }}</b></div>
+      <div class="kv">共写入 <b>{{ v_exportResult.exported }}</b> 行</div>
+      <template v-if="v_exportResult.placeholder_warnings && v_exportResult.placeholder_warnings.length">
+        <div class="kv" style="color:#c33">占位符警告 {{ v_exportResult.placeholder_warnings.length }} 条（{} / %s 与官方不一致，建议检查）：</div>
+        <div class="warn-item" v-for="v_warn in v_exportResult.placeholder_warnings.slice(0, 30)">{{ v_warn.key }}: {{ v_warn.official }} ⇒ {{ v_warn.fix }}</div>
+      </template>
+      <template v-if="v_exportResult.missing_keys && v_exportResult.missing_keys.length">
+        <div class="kv" style="color:#c33">官方结构中不存在的 key {{ v_exportResult.missing_keys.length }} 条（已跳过）：</div>
+        <div class="warn-item">{{ v_exportResult.missing_keys.slice(0, 30).join('  ') }}</div>
+      </template>
+      <div class="foot"><button class="btn primary" @click="v_modal.export=false">好</button></div>
+    </div>
+  </div>
+
+  <div id="toast" v-if="v_toast">{{ v_toast }}</div>
+</div>
+
+<script src="/vendor/vue.global.prod.js"></script>
+<script>window.Vue || document.write('<script src="https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.min.js"><\/script>')</script>
+<script src="/app.js"></script>
+</body>
+</html>

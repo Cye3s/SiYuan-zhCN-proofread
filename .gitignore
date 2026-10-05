@@ -1,0 +1,6 @@
+data.db*
+siyuan_fix.db*
+*.log
+*.exe
+*.exe~
+langs/

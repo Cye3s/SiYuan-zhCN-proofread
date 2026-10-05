@@ -1,0 +1,16 @@
+SiYuan-zhCN-proofread
+Copyright (c) 2026 Cye3s
+
+1. Program code (Go sources, frontend HTML/JS/CSS, build scripts)
+   is licensed under the MIT License.
+
+2. The proofread database (data.db, containing corrections to SiYuan's
+   official zh-CN.json) and any zh-CN.json exported from it are
+   derivative works of SiYuan's official zh-CN.json
+   (AGPL-3.0, https://github.com/siyuan-note/siyuan) and are therefore
+   distributed under AGPL-3.0. Modifications are limited to translation
+   wording and never change the original meaning.
+
+3. Original documents (proofreading notes, suggestion lists) are
+   licensed under CC BY 4.0
+   (https://creativecommons.org/licenses/by/4.0/).
