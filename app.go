@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"sync"
 
+	"github.com/longbridgeapp/opencc"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -33,37 +35,44 @@ type MigrateReq struct {
 }
 
 type ExportStats struct {
-	OK                  bool             `json:"ok"`
-	Out                 string           `json:"out,omitempty"`
-	Exported            int              `json:"exported"`
-	MissingKeys         []string         `json:"missing_keys"`
+	OK                  bool              `json:"ok"`
+	Out                 string            `json:"out,omitempty"`
+	Exported            int               `json:"exported"`
+	MissingKeys         []string          `json:"missing_keys"`
 	PlaceholderWarnings []PlaceholderWarn `json:"placeholder_warnings"`
 }
 
 type PlaceholderWarn struct {
-	Key      string `json:"key"`
-	Official string `json:"official"`
-	Fix      string `json:"fix"`
+	Key string `json:"key"`
+	Cn  string `json:"cn"`
+	Fix string `json:"fix"`
 }
 
 type entryJSON struct {
-	Key          string  `json:"key"`
-	Display      string  `json:"display"`
-	ZhTw         *string `json:"zh_tw"`
-	OfficialCN   *string `json:"official_cn"`
-	OfficialPrev *string `json:"official_prev"`
-	FixCN        *string `json:"fix_cn"`
-	IsNew        int     `json:"is_new"`
-	Status       string  `json:"status"`
+	Key      string  `json:"key"`
+	Display  string  `json:"display"`
+	ZhTw     *string `json:"zh_tw"`
+	ZhCN     *string `json:"zh_cn"`
+	ZhCNPrev *string `json:"zh_cn_prev"`
+	FixCN    *string `json:"fix_cn"`
+	En       *string `json:"en,omitempty"`
+	IsNew    int     `json:"is_new"`
+	Status   string  `json:"status"`
+	Order    int     `json:"order"`
+	Simp     string  `json:"simp,omitempty"`
 }
 
 type App struct {
-	v_ctx   context.Context
-	v_store *Store
+	v_ctx       context.Context
+	v_store     *Store
+	v_tw2s      *opencc.OpenCC // 字面转换（台湾正体→简体）
+	v_tw2sp     *opencc.OpenCC // 词汇转换（台湾用词→大陆用词）
+	v_simpMu    sync.Mutex
+	v_simpCache map[string]string // 简中+繁体 -> 三色状态（导入后两列不变，命中缓存免重复转换）
 }
 
 func NewApp(p_store *Store) *App {
-	return &App{v_store: p_store}
+	return &App{v_store: p_store, v_simpCache: map[string]string{}}
 }
 
 func (v_app *App) setCtx(p_ctx context.Context) { v_app.v_ctx = p_ctx }
@@ -118,31 +127,137 @@ func (v_app *App) handleEntries(p_writer http.ResponseWriter) {
 		writeJSON(p_writer, 500, map[string]string{"detail": v_err.Error()})
 		return
 	}
+	v_order := v_app.keyOrder()
+	v_en := v_app.enMap()
 	v_list := make([]entryJSON, 0, len(v_entries))
 	for _, v_entry := range v_entries {
 		v_item := entryJSON{
 			Key: v_entry.Key, Display: DisplayKey(v_entry.Key),
 			IsNew: v_entry.IsNew, Status: v_entry.Status,
 		}
+		if v_idx, v_ok := v_order[v_entry.Key]; v_ok {
+			v_item.Order = v_idx
+		} else {
+			v_item.Order = 1<<30 + int(v_entry.ID) // 不在简中文件里的行排最后，按 id 保持稳定
+		}
+		v_item.Simp = v_app.simpState(v_entry)
 		if v_entry.ZhTw.Valid {
 			v_val := v_entry.ZhTw.String
 			v_item.ZhTw = &v_val
 		}
-		if v_entry.OfficialCN.Valid {
-			v_val := v_entry.OfficialCN.String
-			v_item.OfficialCN = &v_val
+		if v_entry.ZhCN.Valid {
+			v_val := v_entry.ZhCN.String
+			v_item.ZhCN = &v_val
 		}
-		if v_entry.OfficialPrev.Valid {
-			v_val := v_entry.OfficialPrev.String
-			v_item.OfficialPrev = &v_val
+		if v_entry.ZhCNPrev.Valid {
+			v_val := v_entry.ZhCNPrev.String
+			v_item.ZhCNPrev = &v_val
 		}
 		if v_entry.FixCN.Valid {
 			v_val := v_entry.FixCN.String
 			v_item.FixCN = &v_val
 		}
+		if v_enVal, v_ok := v_en[v_entry.Key]; v_ok {
+			v_item.En = &v_enVal
+		}
 		v_list = append(v_list, v_item)
 	}
 	writeJSON(p_writer, 200, map[string]any{"rows": v_list})
+}
+
+// keyOrder 简中文件保序展平后的 key 顺序（表格按 json 中顺序排序用）
+func (v_app *App) keyOrder() map[string]int {
+	v_order := map[string]int{}
+	v_json, v_ok, v_err := v_app.v_store.ZhCNJSON()
+	if v_err != nil || !v_ok {
+		return v_order
+	}
+	v_root, v_err := ParseOrdered([]byte(v_json))
+	if v_err != nil {
+		return v_order
+	}
+	var v_list []string
+	FlattenOrder(v_root, "", &v_list)
+	for v_idx, v_ptr := range v_list {
+		v_order[v_ptr] = v_idx
+	}
+	return v_order
+}
+
+// enMap 英文参考展平（meta.en_json；未导入返回空 map）
+func (v_app *App) enMap() map[string]string {
+	v_map := map[string]string{}
+	v_json, v_ok, v_err := v_app.v_store.EnJSON()
+	if v_err != nil || !v_ok {
+		return v_map
+	}
+	v_root, v_err := ParseOrdered([]byte(v_json))
+	if v_err != nil {
+		return v_map
+	}
+	return Flatten(v_root, "", v_map)
+}
+
+// tw2s / tw2sp 懒加载繁→简转换器（词典编译期内嵌，失败返回 nil 则不判定）
+func (v_app *App) tw2s() *opencc.OpenCC {
+	v_app.v_simpMu.Lock()
+	defer v_app.v_simpMu.Unlock()
+	if v_app.v_tw2s == nil {
+		if v_cc, v_err := opencc.New("tw2s"); v_err == nil {
+			v_app.v_tw2s = v_cc
+		}
+	}
+	return v_app.v_tw2s
+}
+
+func (v_app *App) tw2sp() *opencc.OpenCC {
+	v_app.v_simpMu.Lock()
+	defer v_app.v_simpMu.Unlock()
+	if v_app.v_tw2sp == nil {
+		if v_cc, v_err := opencc.New("tw2sp"); v_err == nil {
+			v_app.v_tw2sp = v_cc
+		}
+	}
+	return v_app.v_tw2sp
+}
+
+// simpClass 三色判定（带缓存）：
+//
+//	same  字面转换即相同（淡蓝：简繁字面相同，直转残留重点）
+//	match 字面不同、按台湾用词转换后一致（淡黄：无需校对）
+//	diff  两种转换都不同（淡红：需人工校正）
+func (v_app *App) simpClass(p_cn, p_tw string) string {
+	if p_cn == "" || p_tw == "" {
+		return ""
+	}
+	v_key := p_cn + "\x00" + p_tw
+	v_app.v_simpMu.Lock()
+	v_hit, v_ok := v_app.v_simpCache[v_key]
+	v_app.v_simpMu.Unlock()
+	if v_ok {
+		return v_hit
+	}
+	v_state := "diff"
+	if v_out, v_err := v_app.tw2s().Convert(p_tw); v_err == nil && v_out == p_cn {
+		v_state = "same"
+	} else if v_out2, v_err2 := v_app.tw2sp().Convert(p_tw); v_err2 == nil && v_out2 == p_cn {
+		v_state = "match"
+	}
+	v_app.v_simpMu.Lock()
+	v_app.v_simpCache[v_key] = v_state
+	v_app.v_simpMu.Unlock()
+	return v_state
+}
+
+// simpState 行级状态：无法判定（未导入 zh-TW 或简中为空）返回空
+func (v_app *App) simpState(p_entry Entry) string {
+	if !p_entry.ZhTw.Valid || !p_entry.ZhCN.Valid {
+		return ""
+	}
+	if v_app.tw2s() == nil || v_app.tw2sp() == nil {
+		return ""
+	}
+	return v_app.simpClass(p_entry.ZhCN.String, p_entry.ZhTw.String)
 }
 
 func (v_app *App) handleImport(p_writer http.ResponseWriter, p_req *http.Request) {
@@ -167,8 +282,15 @@ func (v_app *App) handleImport(p_writer http.ResponseWriter, p_req *http.Request
 			return
 		}
 		writeJSON(p_writer, 200, map[string]any{"ok": true, "rows": v_count})
-	case "official":
-		v_res, v_err := v_app.v_store.ImportOfficial(v_root, v_req.Content, v_req.Source)
+	case "en":
+		v_count, v_err := v_app.v_store.ImportEn(v_root, v_req.Content)
+		if v_err != nil {
+			writeJSON(p_writer, 500, map[string]string{"detail": v_err.Error()})
+			return
+		}
+		writeJSON(p_writer, 200, map[string]any{"ok": true, "rows": v_count})
+	case "cn":
+		v_res, v_err := v_app.v_store.ImportCn(v_root, v_req.Content, v_req.Source)
 		if v_err != nil {
 			writeJSON(p_writer, 500, map[string]string{"detail": v_err.Error()})
 			return
@@ -217,27 +339,27 @@ func (v_app *App) handleExportContent(p_writer http.ResponseWriter) {
 	}
 	writeJSON(p_writer, 200, map[string]any{
 		"ok": v_stats.OK, "exported": v_stats.Exported,
-		"missing_keys":        v_stats.MissingKeys,
+		"missing_keys":         v_stats.MissingKeys,
 		"placeholder_warnings": v_stats.PlaceholderWarnings,
-		"content":             v_text,
+		"content":              v_text,
 	})
 }
 
 // ---------- 导出 ----------
 func (v_app *App) buildExport() (string, *ExportStats, error) {
-	v_official, v_ok, v_err := v_app.v_store.OfficialJSON()
+	v_cnJson, v_ok, v_err := v_app.v_store.ZhCNJSON()
 	if v_err != nil {
 		return "", nil, v_err
 	}
 	if !v_ok {
-		return "", nil, fmt.Errorf("尚未导入官方 zh-CN.json，无法导出")
+		return "", nil, fmt.Errorf("尚未导入 zh-CN.json，无法导出")
 	}
-	v_root, v_err := ParseOrdered([]byte(v_official))
+	v_root, v_err := ParseOrdered([]byte(v_cnJson))
 	if v_err != nil {
 		return "", nil, v_err
 	}
-	v_indent := DetectIndent(v_official)
-	v_officialPtrs := Flatten(v_root, "", map[string]string{})
+	v_indent := DetectIndent(v_cnJson)
+	v_cnPtrs := Flatten(v_root, "", map[string]string{})
 
 	v_entries, v_err := v_app.v_store.Entries()
 	if v_err != nil {
@@ -252,15 +374,15 @@ func (v_app *App) buildExport() (string, *ExportStats, error) {
 		if v_entry.Status == "obsolete" {
 			continue
 		}
-		if _, v_exists := v_officialPtrs[v_entry.Key]; !v_exists {
+		if _, v_exists := v_cnPtrs[v_entry.Key]; !v_exists {
 			continue
 		}
-		// 第 4 列与官方相同就复制（fix_cn 有值即用，无值回退官方）
+		// 第 4 列与简中相同就复制（fix_cn 有值即用，无值回退简中）
 		v_val := ""
 		if v_entry.FixCN.Valid && v_entry.FixCN.String != "" {
 			v_val = v_entry.FixCN.String
-		} else if v_entry.OfficialCN.Valid {
-			v_val = v_entry.OfficialCN.String
+		} else if v_entry.ZhCN.Valid {
+			v_val = v_entry.ZhCN.String
 		} else {
 			continue
 		}
@@ -269,10 +391,10 @@ func (v_app *App) buildExport() (string, *ExportStats, error) {
 			continue
 		}
 		v_stats.Exported++
-		if v_entry.FixCN.Valid && v_entry.FixCN.String != "" && v_entry.OfficialCN.Valid {
-			if PlaceholderMismatch(v_entry.FixCN.String, v_entry.OfficialCN.String) {
+		if v_entry.FixCN.Valid && v_entry.FixCN.String != "" && v_entry.ZhCN.Valid {
+			if PlaceholderMismatch(v_entry.FixCN.String, v_entry.ZhCN.String) {
 				v_stats.PlaceholderWarnings = append(v_stats.PlaceholderWarnings, PlaceholderWarn{
-					Key: DisplayKey(v_entry.Key), Official: v_entry.OfficialCN.String, Fix: v_entry.FixCN.String,
+					Key: DisplayKey(v_entry.Key), Cn: v_entry.ZhCN.String, Fix: v_entry.FixCN.String,
 				})
 			}
 		}
@@ -318,7 +440,7 @@ func (v_app *App) ExportWithDialog() (map[string]any, error) {
 	}
 	return map[string]any{
 		"ok": v_stats.OK, "out": v_stats.Out, "exported": v_stats.Exported,
-		"missing_keys":        v_stats.MissingKeys,
+		"missing_keys":         v_stats.MissingKeys,
 		"placeholder_warnings": v_stats.PlaceholderWarnings,
 	}, nil
 }

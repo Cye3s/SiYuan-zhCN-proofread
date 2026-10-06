@@ -1,35 +1,34 @@
 @echo off
-chcp 65001 >nul
 REM ============================================================
-REM  SiYuan-zhCN-proofread æ€æºç®€ä¸­æ ¡å¯¹ - æ‰“åŒ…è„šæœ¬
-REM  å‰æï¼šå·²å®‰è£… Goï¼ˆ1.21+ï¼‰ï¼Œapp.ico ä¸æœ¬è„šæœ¬åŒç›®å½•
-REM  äº§ç‰©ï¼šæœ¬ç›®å½• SiYuan-zhCN-proofread.exeï¼ˆå•æ–‡ä»¶ï¼Œåº“ data.db åœ¨ exe æ—ï¼‰
+REM  SiYuan-zhCN-proofread Ë¼Ô´¼òÖĞĞ£¶Ô - ´ò°ü½Å±¾
+REM  Ç°Ìá£ºÒÑ°²×° Go£¨1.21+£©£¬app.ico Óë±¾½Å±¾Í¬Ä¿Â¼
+REM  ²úÎï£º±¾Ä¿Â¼ SiYuan-zhCN-proofread.exe£¨µ¥ÎÄ¼ş£¬¿â data.db ÔÚ exe ÅÔ£©
 REM ============================================================
 
 cd /d "%~dp0"
 
 if not exist "app.ico" (
-    echo [é”™è¯¯] ç¼ºå°‘ app.icoï¼Œè¯·æŠŠå›¾æ ‡æ–‡ä»¶æ”¾åˆ°æœ¬ç›®å½•åé‡è¯•
+    echo [´íÎó] È±ÉÙ app.ico£¬Çë°ÑÍ¼±êÎÄ¼ş·Åµ½±¾Ä¿Â¼ºóÖØÊÔ
     pause
     exit /b 1
 )
 
-echo [1/3] ç”Ÿæˆå›¾æ ‡ä¸ç‰ˆæœ¬èµ„æºï¼ˆwinres.json å«åŒå›¾æ ‡ç»„ï¼šID=1 èµ„æºç®¡ç†å™¨ / ID=32512 çª—å£æ ‡é¢˜æ ï¼‰...
+echo [1/3] Éú³ÉÍ¼±êÓë°æ±¾×ÊÔ´£¨winres.json º¬Ë«Í¼±ê×é£ºID=1 ×ÊÔ´¹ÜÀíÆ÷ / ID=32512 ´°¿Ú±êÌâÀ¸£©...
 go run github.com/tc-hib/go-winres@latest make --in winres.json --arch amd64
 if errorlevel 1 (
-    echo [é”™è¯¯] èµ„æºç”Ÿæˆå¤±è´¥ï¼Œè¯·æ£€æŸ¥ Go ç¯å¢ƒ
+    echo [´íÎó] ×ÊÔ´Éú³ÉÊ§°Ü£¬Çë¼ì²é Go »·¾³
     pause
     exit /b 1
 )
 
-echo [2/3] ç¼–è¯‘å•æ–‡ä»¶ exeï¼ˆWails å¿…é¡»å¸¦ desktop,production tagsï¼›-H windowsgui éšè—æ§åˆ¶å°é»‘æ¡†ï¼‰...
+echo [2/3] ±àÒëµ¥ÎÄ¼ş exe£¨Wails ±ØĞë´ø desktop,production tags£»-H windowsgui Òş²Ø¿ØÖÆÌ¨ºÚ¿ò£©...
 go build -tags desktop,production -trimpath -ldflags "-s -w -H windowsgui" -o SiYuan-zhCN-proofread.exe .
 if errorlevel 1 (
-    echo [é”™è¯¯] ç¼–è¯‘å¤±è´¥
+    echo [´íÎó] ±àÒëÊ§°Ü
     pause
     exit /b 1
 )
 
-echo [3/3] å®Œæˆï¼š%cd%\SiYuan-zhCN-proofread.exe
-echo  åŒå‡»è¿è¡Œä¸ºåŸç”Ÿçª—å£ï¼›åº“ data.db å»ºåœ¨ exe æ—ã€‚
+echo [3/3] Íê³É£º%cd%\SiYuan-zhCN-proofread.exe
+echo  Ë«»÷ÔËĞĞÎªÔ­Éú´°¿Ú£»¿â data.db ½¨ÔÚ exe ÅÔ¡£
 pause

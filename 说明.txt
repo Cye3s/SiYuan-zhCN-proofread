@@ -3,13 +3,13 @@
 
 压缩包内容
   SiYuan-zhCN-proofread.exe  校对工具（单文件，无需安装）
-  data.db                    预置校对数据库（基于思源 3.8.6 官方 zh-CN.json）
+  data.db                    预置校对数据库（基于思源 3.8.6 简体中文语言文件 zh-CN.json）
   说明.txt                   本文件
 
 数据说明
-  1. data.db 中的校对内容基于思源笔记 3.8.6 官方简体中文语言文件 zh-CN.json，
+  1. data.db 中的校对内容基于思源笔记 3.8.6 简体中文语言文件 zh-CN.json，
      仅修正译文用词（如「页签」→「标签页」），不修改任何原意。
-  2. 思源官方语言文件来自 https://github.com/siyuan-note/siyuan（AGPL-3.0 许可），
+  2. 思源语言文件来自 https://github.com/siyuan-note/siyuan（AGPL-3.0 许可），
      本数据库及从它导出的语言文件遵循 AGPL-3.0 分发。
   3. 校对不是标准，欢迎任何人指正：
      https://github.com/Cye3s/SiYuan-zhCN-proofread/issues
@@ -19,11 +19,12 @@
 使用方法
   1. 解压到任意独立文件夹，运行 SiYuan-zhCN-proofread.exe
   2. 打开主界面时表格为空，属正常现象，请按界面提示导入对应 json 文件：
-     先「导入官方zh-CN.json」（从思源安装目录
-     resources\appearance\langs\ 复制），压缩包预置的校对成果会自动合并显示；
-     需要繁体参照时先「导入zh-TW.json」
+      先「导入zh-CN.json」（从思源安装目录
+      resources\appearance\langs\ 复制），压缩包预置的校对成果会自动合并显示；
+      需要繁体参照时先「导入zh-TW.json」；可选「导入en.json(可选)」
+      （双击校对时编辑框上方显示英文原文参考）
   3. 点「导出校对结果」生成校订版 zh-CN.json（路径与文件名自由选择）
-  4. 覆盖思源官方文件前，建议先备份原文件（如改名为 zh-CN.json.bak）
+  4. 覆盖思源语言文件前，建议先备份原文件（如改名为 zh-CN.json.bak）
 
 注意
   运行期间 data.db 旁出现 data.db-wal / data.db-shm 属正常现象，

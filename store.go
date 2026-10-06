@@ -12,14 +12,14 @@ import (
 )
 
 type Entry struct {
-	ID           int64
-	Key          string
-	ZhTw         sql.NullString
-	OfficialCN   sql.NullString
-	OfficialPrev sql.NullString
-	FixCN        sql.NullString
-	IsNew        int
-	Status       string
+	ID       int64
+	Key      string
+	ZhTw     sql.NullString
+	ZhCN     sql.NullString
+	ZhCNPrev sql.NullString
+	FixCN    sql.NullString
+	IsNew    int
+	Status   string
 }
 
 type RenamePair struct {
@@ -38,14 +38,14 @@ type SyncResult struct {
 
 const p_schema = `
 CREATE TABLE IF NOT EXISTS entries (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    key           TEXT UNIQUE NOT NULL,
-    zh_tw         TEXT,
-    official_cn   TEXT,
-    official_prev TEXT,
-    fix_cn        TEXT,
-    is_new        INTEGER DEFAULT 0,
-    status        TEXT DEFAULT 'pending'
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    key         TEXT UNIQUE NOT NULL,
+    zh_tw       TEXT,
+    zh_cn       TEXT,
+    zh_cn_prev  TEXT,
+    fix_cn      TEXT,
+    is_new      INTEGER DEFAULT 0,
+    status      TEXT DEFAULT 'pending'
 );
 CREATE TABLE IF NOT EXISTS sync_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +74,53 @@ func OpenStore(p_path string) (*Store, error) {
 	if _, v_err = v_db.Exec(p_schema); v_err != nil {
 		return nil, v_err
 	}
-	return &Store{db: v_db}, nil
+	v_store := &Store{db: v_db}
+	if v_err = v_store.migrateLegacy(); v_err != nil {
+		return nil, v_err
+	}
+	return v_store, nil
+}
+
+// migrateLegacy v1.0.0 旧列名/旧 meta key 自动迁移（已是新名时跳过，幂等）
+func (v_store *Store) migrateLegacy() error {
+	v_rows, v_err := v_store.db.Query(`PRAGMA table_info(entries)`)
+	if v_err != nil {
+		return v_err
+	}
+	var v_cols []string
+	for v_rows.Next() {
+		var v_cid, v_notNull, v_pk int
+		var v_name, v_type string
+		var v_default sql.NullString
+		if v_err = v_rows.Scan(&v_cid, &v_name, &v_type, &v_notNull, &v_default, &v_pk); v_err != nil {
+			v_rows.Close()
+			return v_err
+		}
+		v_cols = append(v_cols, v_name)
+	}
+	v_rows.Close()
+	v_hasCol := func(p_name string) bool {
+		for _, v_col := range v_cols {
+			if v_col == p_name {
+				return true
+			}
+		}
+		return false
+	}
+	if v_hasCol("official_cn") {
+		if _, v_err = v_store.db.Exec(`ALTER TABLE entries RENAME COLUMN official_cn TO zh_cn`); v_err != nil {
+			return v_err
+		}
+	}
+	if v_hasCol("official_prev") {
+		if _, v_err = v_store.db.Exec(`ALTER TABLE entries RENAME COLUMN official_prev TO zh_cn_prev`); v_err != nil {
+			return v_err
+		}
+	}
+	if _, v_err = v_store.db.Exec(`UPDATE meta SET k='zh_cn_json' WHERE k='official_json'`); v_err != nil {
+		return v_err
+	}
+	return nil
 }
 
 func (v_store *Store) Close() error { return v_store.db.Close() }
@@ -83,12 +129,12 @@ func (v_store *Store) Close() error { return v_store.db.Close() }
 func scanEntry(p_rows *sql.Rows) (Entry, error) {
 	var v_entry Entry
 	v_err := p_rows.Scan(&v_entry.ID, &v_entry.Key, &v_entry.ZhTw,
-		&v_entry.OfficialCN, &v_entry.OfficialPrev,
+		&v_entry.ZhCN, &v_entry.ZhCNPrev,
 		&v_entry.FixCN, &v_entry.IsNew, &v_entry.Status)
 	return v_entry, v_err
 }
 
-const p_selectEntries = `SELECT id, key, zh_tw, official_cn, official_prev, fix_cn, is_new, status FROM entries`
+const p_selectEntries = `SELECT id, key, zh_tw, zh_cn, zh_cn_prev, fix_cn, is_new, status FROM entries`
 
 // Entries 全量条目
 func (v_store *Store) Entries() ([]Entry, error) {
@@ -108,7 +154,7 @@ func (v_store *Store) Entries() ([]Entry, error) {
 	return v_list, v_rows.Err()
 }
 
-// ImportTw 导入繁体参照：更新已有行的 zh_tw，缺失 key 建占位行（official_cn 留空，不进导出）
+// ImportTw 导入繁体参照：更新已有行的 zh_tw，缺失 key 建占位行（zh_cn 留空，不进导出）
 func (v_store *Store) ImportTw(p_flat map[string]string) (int, error) {
 	v_tx, v_err := v_store.db.Begin()
 	if v_err != nil {
@@ -135,9 +181,9 @@ func (v_store *Store) ImportTw(p_flat map[string]string) (int, error) {
 	return len(p_flat), nil
 }
 
-// ImportOfficial 官方版本同步：
-// 新增打 is_new、消失软删 obsolete、值漂移留底 official_prev、值相同疑似改名配对
-func (v_store *Store) ImportOfficial(p_root *Node, p_content, p_source string) (*SyncResult, error) {
+// ImportCn 简中版本同步：
+// 新增打 is_new、消失软删 obsolete、值漂移留底 zh_cn_prev、值相同疑似改名配对
+func (v_store *Store) ImportCn(p_root *Node, p_content, p_source string) (*SyncResult, error) {
 	v_flat := Flatten(p_root, "", map[string]string{})
 
 	v_tx, v_err := v_store.db.Begin()
@@ -160,13 +206,13 @@ func (v_store *Store) ImportOfficial(p_root *Node, p_content, p_source string) (
 
 	v_result := &SyncResult{OK: true, Renamed: []RenamePair{}}
 	v_added, v_removed, v_changed := 0, 0, 0
-	v_vanishedVals := map[string]string{} // 消失行的官方值 -> pointer（改名检测用）
+	v_vanishedVals := map[string]string{} // 消失行的简中值 -> pointer（改名检测用）
 
 	for v_ptr, v_val := range v_flat {
 		v_old, v_exists := v_existing[v_ptr]
 		if !v_exists {
 			if _, v_err = v_tx.Exec(
-				`INSERT INTO entries(key, official_cn, is_new, status) VALUES(?,?,1,'pending')`,
+				`INSERT INTO entries(key, zh_cn, is_new, status) VALUES(?,?,1,'pending')`,
 				v_ptr, v_val); v_err != nil {
 				return nil, v_err
 			}
@@ -174,21 +220,21 @@ func (v_store *Store) ImportOfficial(p_root *Node, p_content, p_source string) (
 			continue
 		}
 		switch {
-		case !v_old.OfficialCN.Valid: // tw 先行导入的占位行，官方首次填上
+		case !v_old.ZhCN.Valid: // tw 先行导入的占位行，简中首次填上
 			if _, v_err = v_tx.Exec(
-				`UPDATE entries SET official_cn=?, is_new=1, status='pending' WHERE key=?`,
+				`UPDATE entries SET zh_cn=?, is_new=1, status='pending' WHERE key=?`,
 				v_val, v_ptr); v_err != nil {
 				return nil, v_err
 			}
 			v_added++
-		case v_old.OfficialCN.String != v_val: // 官方值已修改（需重新核对）
+		case v_old.ZhCN.String != v_val: // 简中值已修改（需重新核对）
 			v_status := "pending"
 			if v_old.FixCN.Valid && v_old.FixCN.String != "" {
 				v_status = "stale"
 			}
 			if _, v_err = v_tx.Exec(
-				`UPDATE entries SET official_prev=?, official_cn=?, status=?, is_new=0 WHERE key=?`,
-				v_old.OfficialCN.String, v_val, v_status, v_ptr); v_err != nil {
+				`UPDATE entries SET zh_cn_prev=?, zh_cn=?, status=?, is_new=0 WHERE key=?`,
+				v_old.ZhCN.String, v_val, v_status, v_ptr); v_err != nil {
 				return nil, v_err
 			}
 			v_changed++
@@ -205,7 +251,7 @@ func (v_store *Store) ImportOfficial(p_root *Node, p_content, p_source string) (
 		}
 	}
 
-	// 官方消失的 key -> 软删
+	// 简中文件消失的 key -> 软删
 	for v_ptr, v_old := range v_existing {
 		if _, v_exists := v_flat[v_ptr]; !v_exists {
 			if _, v_err = v_tx.Exec(
@@ -213,13 +259,13 @@ func (v_store *Store) ImportOfficial(p_root *Node, p_content, p_source string) (
 				return nil, v_err
 			}
 			v_removed++
-			if v_old.OfficialCN.Valid {
-				v_vanishedVals[v_old.OfficialCN.String] = v_ptr
+			if v_old.ZhCN.Valid {
+				v_vanishedVals[v_old.ZhCN.String] = v_ptr
 			}
 		}
 	}
 
-	// 疑似改名检测：消失行的官方值 == 新增 key 的官方值
+	// 疑似改名检测：消失行的简中值 == 新增 key 的简中值
 	for v_ptr, v_val := range v_flat {
 		if _, v_existed := v_existing[v_ptr]; v_existed {
 			continue
@@ -230,9 +276,9 @@ func (v_store *Store) ImportOfficial(p_root *Node, p_content, p_source string) (
 		}
 	}
 
-	// 官方原文与同步日志
+	// 简中原文与同步日志
 	if _, v_err = v_tx.Exec(
-		`INSERT INTO meta(k,v) VALUES('official_json',?)
+		`INSERT INTO meta(k,v) VALUES('zh_cn_json',?)
 		 ON CONFLICT(k) DO UPDATE SET v=excluded.v`, p_content); v_err != nil {
 		return nil, v_err
 	}
@@ -303,11 +349,44 @@ func (v_store *Store) MigrateFix(p_from, p_to string) (bool, string, error) {
 	return true, "", nil
 }
 
-// OfficialJSON 取官方原文（导出骨架）
-func (v_store *Store) OfficialJSON() (string, bool, error) {
+// ZhCNJSON 取简中原文（导出骨架）
+func (v_store *Store) ZhCNJSON() (string, bool, error) {
 	var v_content string
 	v_err := v_store.db.QueryRow(
-		`SELECT v FROM meta WHERE k='official_json'`).Scan(&v_content)
+		`SELECT v FROM meta WHERE k='zh_cn_json'`).Scan(&v_content)
+	if v_err != nil {
+		if errors.Is(v_err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, v_err
+	}
+	return v_content, true, nil
+}
+
+// ImportEn 导入英文参考：仅存 meta 全文（不进 entries 状态机，双击校对时参考）
+func (v_store *Store) ImportEn(p_root *Node, p_content string) (int, error) {
+	v_flat := Flatten(p_root, "", map[string]string{})
+	v_tx, v_err := v_store.db.Begin()
+	if v_err != nil {
+		return 0, v_err
+	}
+	defer v_tx.Rollback()
+	if _, v_err = v_tx.Exec(
+		`INSERT INTO meta(k,v) VALUES('en_json',?)
+		 ON CONFLICT(k) DO UPDATE SET v=excluded.v`, p_content); v_err != nil {
+		return 0, v_err
+	}
+	if v_err = v_tx.Commit(); v_err != nil {
+		return 0, v_err
+	}
+	return len(v_flat), nil
+}
+
+// EnJSON 取英文参考全文（未导入时 ok=false）
+func (v_store *Store) EnJSON() (string, bool, error) {
+	var v_content string
+	v_err := v_store.db.QueryRow(
+		`SELECT v FROM meta WHERE k='en_json'`).Scan(&v_content)
 	if v_err != nil {
 		if errors.Is(v_err, sql.ErrNoRows) {
 			return "", false, nil

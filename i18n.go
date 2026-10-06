@@ -1,6 +1,6 @@
 package main
 
-// 保序 JSON 处理：解析 zh-CN.json → 修改 → 导出，key 顺序必须与官方完全一致。
+// 保序 JSON 处理：解析 zh-CN.json → 修改 → 导出，key 顺序必须与原文件完全一致。
 // 标准库 map 会按字母序重排，自建保序结构：Token 流解析 + 按原序序列化。
 
 import (
@@ -104,7 +104,7 @@ func parseObject(p_dec *json.Decoder) (*Node, error) {
 func marshalString(p_str string) string {
 	var v_buf bytes.Buffer
 	v_enc := json.NewEncoder(&v_buf)
-	v_enc.SetEscapeHTML(false) // 不转义 HTML 字符，与官方文件一致
+	v_enc.SetEscapeHTML(false) // 不转义 HTML 字符，与原文件一致
 	_ = v_enc.Encode(p_str)
 	return strings.TrimRight(v_buf.String(), "\n")
 }
@@ -137,7 +137,7 @@ func (v_node *Node) WriteTo(p_buf *bytes.Buffer, p_indent string, p_cur int) {
 	p_buf.WriteString("}")
 }
 
-// Serialize 全量输出（顶层无缩进），末尾带换行（与官方文件一致）
+// Serialize 全量输出（顶层无缩进），末尾带换行（与原文件一致）
 func (v_node *Node) Serialize(p_indent string) []byte {
 	var v_buf bytes.Buffer
 	v_node.WriteTo(&v_buf, p_indent, 0)
@@ -157,6 +157,18 @@ func Flatten(p_node *Node, p_prefix string, p_out map[string]string) map[string]
 		}
 	}
 	return p_out
+}
+
+// FlattenOrder 保序展平，仅产出指针序列（顺序与文件中 key 出现顺序一致，供表格排序）
+func FlattenOrder(p_node *Node, p_prefix string, p_out *[]string) {
+	for _, v_key := range p_node.Keys {
+		v_ptr := p_prefix + "/" + escKey(v_key)
+		if v_child, v_ok := p_node.Nodes[v_key]; v_ok {
+			FlattenOrder(v_child, v_ptr, p_out)
+		} else if _, v_ok := p_node.Strs[v_key]; v_ok {
+			*p_out = append(*p_out, v_ptr)
+		}
+	}
 }
 
 // SetByPointer 按 pointer 回写字符串叶子；路径不存在返回 false
@@ -225,7 +237,7 @@ func DisplayKey(p_ptr string) string {
 	return v_out
 }
 
-// DetectIndent 探测官方文件缩进（支持空格与 TAB，返回一层缩进字符串）
+// DetectIndent 探测语言文件缩进（支持空格与 TAB，返回一层缩进字符串）
 func DetectIndent(p_content string) string {
 	v_lines := strings.Split(p_content, "\n")
 	for _, v_line := range v_lines[1:] {
@@ -241,17 +253,17 @@ func DetectIndent(p_content string) string {
 	return "  "
 }
 
-// PlaceholderMismatch 占位符数量/类型与官方不一致时返回 true
-func PlaceholderMismatch(p_fix, p_official string) bool {
+// PlaceholderMismatch 占位符数量/类型与简中不一致时返回 true
+func PlaceholderMismatch(p_fix, p_cn string) bool {
 	v_fixList := p_placeholderRe.FindAllString(p_fix, -1)
-	v_officialList := p_placeholderRe.FindAllString(p_official, -1)
-	if len(v_fixList) != len(v_officialList) {
+	v_cnList := p_placeholderRe.FindAllString(p_cn, -1)
+	if len(v_fixList) != len(v_cnList) {
 		return true
 	}
 	sort.Strings(v_fixList)
-	sort.Strings(v_officialList)
+	sort.Strings(v_cnList)
 	for v_idx := range v_fixList {
-		if v_fixList[v_idx] != v_officialList[v_idx] {
+		if v_fixList[v_idx] != v_cnList[v_idx] {
 			return true
 		}
 	}
