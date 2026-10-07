@@ -39,7 +39,11 @@
           <div class="edit-en" tabindex="-1" v-if="v_row.en">en: {{ v_row.en }}</div>
           <textarea ref="v_editBox" class="edit-box" v-model="v_editText"
                     @keydown.enter.prevent="commitEdit"
-                    @keydown.esc.stop.prevent="cancelEdit" @blur="onEditBlur"></textarea>
+                    @keydown.esc.stop.prevent="cancelEdit"></textarea>
+          <div class="edit-foot">
+            <button class="btn primary" @click="commitEdit">确认</button>
+            <button class="btn" @click="cancelEdit">取消</button>
+          </div>
         </div>
       </div>
     </div>
@@ -72,9 +76,9 @@
       <span><i class="sw sw-diff"></i>需人工校正</span>
       <span><i class="sw sw-stale"></i>简中已改·待重核</span>
     </div>
-    <button class="btn" @click="pickFile('en')">导入 en.json （可选）</button>
     <button class="btn" @click="pickFile('tw')">导入 zh-TW.json</button>
     <button class="btn" @click="pickFile('cn')">导入 zh-CN.json</button>
+    <button class="btn" @click="pickFile('en')">导入 en.json （可选）</button>
     <input type="file" ref="v_fileEl" style="display:none" accept=".json" @change="onFile">
   </div>
   <div class="btnrow">
@@ -86,6 +90,7 @@
     <button class="btn" @click="doSearch">查找</button>
     <button class="btn primary" :class="{ unsaved: v_dirty.size }" @click="save">{{ v_dirty.size ? '保存 (' + v_dirty.size + ')' : '保存' }}</button>
     <button class="btn" @click="openReplace">批量替换</button>
+    <button class="btn" @click="openDict">词表</button>
     <button class="btn warn" @click="doExport">导出校对结果</button>
   </div>
 
@@ -111,10 +116,29 @@
         <div class="p-item" v-if="v_repPreview.length > 100" style="color:#999">… 其余 {{ v_repPreview.length - 100 }} 行</div>
       </div>
       <div class="foot">
-        <button class="btn" @click="v_modal.replace=false">取消</button>
         <button class="btn" v-if="v_rep.src" @click="v_repPreview = computeRepPreview()">预览影响行</button>
         <button class="btn primary" @click="applyReplace">全部替换</button>
+        <button class="btn" @click="v_modal.replace=false">取消</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 词表弹窗 -->
+  <div class="mask" v-if="v_modal.dict">
+    <div class="modal">
+      <h3>简繁词表（校对保存时自动捕获）</h3>
+      <div class="kv">保存校对值时，若简繁关系从“需校正”变为“字面相同”或“转换一致”，该繁简对会自动记入词表，下次同类行自动命中。可手动删除不需的规则。</div>
+      <div class="dict-list" v-if="v_dictRows.length">
+        <div class="dict-item" v-for="v_row in v_dictRows">
+          <span class="dict-tw">{{ v_row.tw }}</span>
+          <span class="dict-arrow">→</span>
+          <span class="dict-cn">{{ v_row.cn }}</span>
+          <span class="dict-mode" :class="'mode-' + v_row.mode">{{ v_row.mode === 'same' ? '字面相同' : '转换一致' }}</span>
+          <button class="link-btn" @click="delDict(v_row)">删除</button>
+        </div>
+      </div>
+      <div class="kv" v-else style="color:#999">暂无词表规则</div>
+      <div class="foot"><button class="btn primary" @click="v_modal.dict=false">确认</button></div>
     </div>
   </div>
 

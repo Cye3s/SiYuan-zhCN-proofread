@@ -18,11 +18,11 @@ body { font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; color: #222; ba
 .row.stale { box-shadow: inset 4px 0 0 #f0a030; } /* 简中已改·待重核：橙色左条，不占行背景让位四色 */
 .row.isnew { background: #e8f7e8; }
 .row.isnew:hover { background: #ddf2dd; }
-/* 简繁关系三色：字面相同（淡蓝）/ 词汇转换一致（淡黄）/ 需人工校正（淡红） */
-.row.simp-same { background: #e8f1fd; }
-.row.simp-same:hover { background: #d9e8fa; }
-.row.simp-match { background: #fff6cc; }
-.row.simp-match:hover { background: #ffefb0; }
+/* 简繁关系三色：字面相同（淡黄·校对重点）/ 词汇转换一致（淡蓝·无需校对）/ 需人工校正（淡红） */
+.row.simp-same { background: #fff6cc; }
+.row.simp-same:hover { background: #ffefb0; }
+.row.simp-match { background: #e8f1fd; }
+.row.simp-match:hover { background: #d9e8fa; }
 .row.simp-diff { background: #fdecec; }
 .row.simp-diff:hover { background: #f9dcdc; }
 /* 新增行的简繁状态：行首小色块提示（整行背景已是绿色） */
@@ -50,7 +50,8 @@ mark { background: #ffe89a; padding: 0; border-radius: 2px; }
 /* 编辑态：面板 = 英文参考区（全文显示，超长内部滚动）+ 编辑框 */
 .edit-wrap { position: absolute; z-index: 20; width: calc(100% - 76px); left: 8px; top: 2px; border: 2px solid #4a90d9; border-radius: 3px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
 .edit-en { padding: 4px 8px 2px; color: #777; font: 12px/17px Consolas, monospace; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow-y: auto; border-bottom: 1px dashed #d5d9dd; }
-.edit-box { width: 100%; height: 72px; border: none; padding: 4px 6px; font: 13px Consolas, monospace; resize: none; background: #fff; border-radius: 0 0 3px 3px; outline: none; }
+.edit-box { width: 100%; height: 72px; border: none; padding: 4px 6px; font: 13px Consolas, monospace; resize: none; background: #fff; border-radius: 0; outline: none; }
+.edit-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 4px 6px; border-top: 1px solid #e3e6e9; }
 
 /* ---------- 状态条 ---------- */
 .statusbar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 12px; color: #666; background: #fff; border: 1px solid #d5d9dd; border-radius: 4px; padding: 5px 10px; }
@@ -68,8 +69,8 @@ mark { background: #ffe89a; padding: 0; border-radius: 2px; }
 .legend { margin-right: auto; display: flex; align-items: center; gap: 12px; font-size: 12px; color: #555; flex-wrap: wrap; }
 .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.15); }
 .sw-new { background: #cdecc0; }
-.sw-same { background: #bcd9f7; }
-.sw-match { background: #f5d76e; }
+.sw-same { background: #f5d76e; }
+.sw-match { background: #bcd9f7; }
 .sw-diff { background: #f2b8b8; }
 .sw-stale { background: #f0a030; }
 /* 查找范围勾选项（查找按钮前） */
@@ -100,6 +101,17 @@ button.btn.primary.unsaved:hover { background: #d35400; }
 .warn-item { color: #c33; font-family: Consolas, monospace; font-size: 12px; margin: 2px 0; }
 .mig-item { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
 .mig-item code { font-size: 12px; background: #f2f4f6; padding: 1px 5px; border-radius: 3px; }
+
+/* 词表弹窗 */
+.dict-list { max-height: 320px; overflow-y: auto; border: 1px solid #e3e6e9; border-radius: 4px; margin-top: 8px; }
+.dict-item { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid #f2f2f2; font-size: 13px; }
+.dict-item:hover { background: #f7fafd; }
+.dict-tw { color: #999; min-width: 80px; }
+.dict-arrow { color: #aaa; }
+.dict-cn { color: #222; min-width: 80px; }
+.dict-mode { font-size: 11px; padding: 1px 6px; border-radius: 3px; margin-left: auto; }
+.mode-same { background: #fff6cc; color: #8a6d00; }
+.mode-match { background: #e8f1fd; color: #2a6fd6; }
 
 /* toast */
 #toast { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 8px 18px; border-radius: 4px; z-index: 99; font-size: 13px; box-shadow: 0 4px 14px rgba(0,0,0,.3); }

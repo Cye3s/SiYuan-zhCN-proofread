@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -55,10 +56,18 @@ CREATE TABLE IF NOT EXISTS sync_log (
 CREATE TABLE IF NOT EXISTS meta (
     k TEXT PRIMARY KEY, v TEXT
 );
+CREATE TABLE IF NOT EXISTS simp_dict (
+    tw   TEXT,
+    cn   TEXT,
+    mode TEXT,
+    PRIMARY KEY (tw, cn)
+);
 `
 
 type Store struct {
-	db *sql.DB
+	db       *sql.DB
+	simpDict map[string]string // 简繁词表缓存："tw\x00cn" -> mode（same/match）
+	simpMu   sync.RWMutex
 }
 
 // OpenStore 打开（不存在则初始化）数据库
@@ -74,8 +83,11 @@ func OpenStore(p_path string) (*Store, error) {
 	if _, v_err = v_db.Exec(p_schema); v_err != nil {
 		return nil, v_err
 	}
-	v_store := &Store{db: v_db}
+	v_store := &Store{db: v_db, simpDict: map[string]string{}}
 	if v_err = v_store.migrateLegacy(); v_err != nil {
+		return nil, v_err
+	}
+	if v_err = v_store.loadSimpDict(); v_err != nil {
 		return nil, v_err
 	}
 	return v_store, nil
@@ -155,7 +167,8 @@ func (v_store *Store) Entries() ([]Entry, error) {
 }
 
 // ImportTw 导入繁体参照：更新已有行的 zh_tw，缺失 key 建占位行（zh_cn 留空，不进导出）
-func (v_store *Store) ImportTw(p_flat map[string]string) (int, error) {
+// 同时存 zh_tw_json 全文到 meta，供 keyOrder fallback（仅导入 zh-TW 时也能按文件顺序排）
+func (v_store *Store) ImportTw(p_root *Node, p_content string, p_flat map[string]string) (int, error) {
 	v_tx, v_err := v_store.db.Begin()
 	if v_err != nil {
 		return 0, v_err
@@ -174,6 +187,11 @@ func (v_store *Store) ImportTw(p_flat map[string]string) (int, error) {
 				return 0, v_err
 			}
 		}
+	}
+	if _, v_err = v_tx.Exec(
+		`INSERT INTO meta(k,v) VALUES('zh_tw_json',?)
+		 ON CONFLICT(k) DO UPDATE SET v=excluded.v`, p_content); v_err != nil {
+		return 0, v_err
 	}
 	if v_err = v_tx.Commit(); v_err != nil {
 		return 0, v_err
@@ -297,7 +315,10 @@ func (v_store *Store) ImportCn(p_root *Node, p_content, p_source string) (*SyncR
 }
 
 // SaveRows 保存校对值并标记 verified（key 必须已存在）
-func (v_store *Store) SaveRows(p_rows []SaveRow) (int, error) {
+// 保存时自动捕获简繁词表：若 fix_cn 与 zh_tw 构成 same/match 关系，
+// 记录 tw->fix 映射到 simp_dict，下次同类繁简对自动命中
+// p_classify 回调由 app 层提供（用 OpenCC 判定 tw 与 fix 的关系），可为 nil
+func (v_store *Store) SaveRows(p_rows []SaveRow, p_classify func(p_tw, p_fix string) string) (int, error) {
 	v_tx, v_err := v_store.db.Begin()
 	if v_err != nil {
 		return 0, v_err
@@ -313,6 +334,8 @@ func (v_store *Store) SaveRows(p_rows []SaveRow) (int, error) {
 		if v_count == 0 {
 			return 0, fmt.Errorf("key 不在库中: %s", v_row.Key)
 		}
+		var v_tw sql.NullString
+		_ = v_tx.QueryRow(`SELECT zh_tw FROM entries WHERE key=?`, v_row.Key).Scan(&v_tw)
 		var v_fix any
 		if v_row.FixCN != nil {
 			v_fix = *v_row.FixCN
@@ -320,6 +343,13 @@ func (v_store *Store) SaveRows(p_rows []SaveRow) (int, error) {
 		if _, v_err = v_tx.Exec(
 			`UPDATE entries SET fix_cn=?, status='verified' WHERE key=?`, v_fix, v_row.Key); v_err != nil {
 			return 0, v_err
+		}
+		// 词表捕获：fix_cn 非空且 zh_tw 有值，用回调判定关系后入库
+		if p_classify != nil && v_row.FixCN != nil && *v_row.FixCN != "" && v_tw.Valid && v_tw.String != "" {
+			v_mode := p_classify(v_tw.String, *v_row.FixCN)
+			if v_mode == "same" || v_mode == "match" {
+				v_store.captureSimpDict(v_tx, v_tw.String, *v_row.FixCN, v_mode)
+			}
 		}
 	}
 	if v_err = v_tx.Commit(); v_err != nil {
@@ -394,4 +424,89 @@ func (v_store *Store) EnJSON() (string, bool, error) {
 		return "", false, v_err
 	}
 	return v_content, true, nil
+}
+
+// ZhTWJSON 取繁体原文全文（未导入时 ok=false）
+func (v_store *Store) ZhTWJSON() (string, bool, error) {
+	var v_content string
+	v_err := v_store.db.QueryRow(
+		`SELECT v FROM meta WHERE k='zh_tw_json'`).Scan(&v_content)
+	if v_err != nil {
+		if errors.Is(v_err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, v_err
+	}
+	return v_content, true, nil
+}
+
+// ---------- 简繁词表（校对保存时自动捕获） ----------
+
+// loadSimpDict 启动时全表加载到内存
+func (v_store *Store) loadSimpDict() error {
+	v_rows, v_err := v_store.db.Query(`SELECT tw, cn, mode FROM simp_dict`)
+	if v_err != nil {
+		return v_err
+	}
+	defer v_rows.Close()
+	v_store.simpMu.Lock()
+	defer v_store.simpMu.Unlock()
+	v_store.simpDict = map[string]string{}
+	for v_rows.Next() {
+		var v_tw, v_cn, v_mode string
+		if v_err = v_rows.Scan(&v_tw, &v_cn, &v_mode); v_err != nil {
+			return v_err
+		}
+		v_store.simpDict[v_tw+"\x00"+v_cn] = v_mode
+	}
+	return v_rows.Err()
+}
+
+// LookupSimpDict 查词表：返回 mode（same/match）或空
+func (v_store *Store) LookupSimpDict(p_tw, p_cn string) string {
+	v_store.simpMu.RLock()
+	defer v_store.simpMu.RUnlock()
+	return v_store.simpDict[p_tw+"\x00"+p_cn]
+}
+
+// captureSimpDict 保存时记录词表规则（事务内）
+func (v_store *Store) captureSimpDict(p_tx *sql.Tx, p_tw, p_fix, p_mode string) {
+	if _, v_err := p_tx.Exec(
+		`INSERT INTO simp_dict(tw, cn, mode) VALUES(?,?,?)
+		 ON CONFLICT(tw, cn) DO UPDATE SET mode=excluded.mode`,
+		p_tw, p_fix, p_mode); v_err != nil {
+		return // 词表是优化不是数据，失败不阻保存
+	}
+	v_store.simpMu.Lock()
+	v_store.simpDict[p_tw+"\x00"+p_fix] = p_mode
+	v_store.simpMu.Unlock()
+}
+
+// ListSimpDict 词表列表（前端管理用）
+func (v_store *Store) ListSimpDict() ([]map[string]string, error) {
+	v_rows, v_err := v_store.db.Query(`SELECT tw, cn, mode FROM simp_dict ORDER BY tw`)
+	if v_err != nil {
+		return nil, v_err
+	}
+	defer v_rows.Close()
+	var v_list []map[string]string
+	for v_rows.Next() {
+		var v_tw, v_cn, v_mode string
+		if v_err = v_rows.Scan(&v_tw, &v_cn, &v_mode); v_err != nil {
+			return nil, v_err
+		}
+		v_list = append(v_list, map[string]string{"tw": v_tw, "cn": v_cn, "mode": v_mode})
+	}
+	return v_list, v_rows.Err()
+}
+
+// DeleteSimpDict 删除词表规则
+func (v_store *Store) DeleteSimpDict(p_tw, p_cn string) error {
+	if _, v_err := v_store.db.Exec(`DELETE FROM simp_dict WHERE tw=? AND cn=?`, p_tw, p_cn); v_err != nil {
+		return v_err
+	}
+	v_store.simpMu.Lock()
+	delete(v_store.simpDict, p_tw+"\x00"+p_cn)
+	v_store.simpMu.Unlock()
+	return nil
 }

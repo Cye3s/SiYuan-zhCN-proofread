@@ -31,11 +31,12 @@ createApp({
     const v_repPreview = ref([]);
     const v_replaceHistory = ref(JSON.parse(localStorage.getItem('syfix_hist') || '[]'));
 
-    const v_modal = reactive({ replace: false, sync: false, export: false, import: false });
+    const v_modal = reactive({ replace: false, sync: false, export: false, import: false, dict: false });
     const v_syncSummary = ref({ added: 0, removed: 0, changed: 0, renamed: [] });
     const v_importTitle = ref('');
     const v_importMsg = ref('');
     const v_exportResult = ref({});
+    const v_dictRows = ref([]);
     const v_toast = ref('');
 
     const v_scrollEl = ref(null), v_searchEl = ref(null), v_fileEl = ref(null);
@@ -101,7 +102,13 @@ createApp({
       const v_res = await fetch('/api/entries');
       const v_data = await v_res.json();
       // 按 zh-CN json 文件中的 key 顺序排序（不在文件中的行由后端排在最后）
-      v_rows.value = v_data.rows.slice().sort((a, b) => (a.order - b.order) || (a.key < b.key ? -1 : 1));
+      // 标准三态比较，避免 || 短路导致相同 order 时排序不稳定
+      v_rows.value = v_data.rows.slice().sort((a, b) => {
+        if (a.order !== b.order) return a.order - b.order;
+        if (a.key < b.key) return -1;
+        if (a.key > b.key) return 1;
+        return 0;
+      });
       calcKeyCol();
     }
 
@@ -272,8 +279,8 @@ createApp({
       return v_cls;
     }
     function simpColor(p_row) {
-      return p_row.simp === 'same' ? '#7fb2f0'
-        : p_row.simp === 'match' ? '#e8c95a'
+      return p_row.simp === 'same' ? '#e8c95a'
+        : p_row.simp === 'match' ? '#7fb2f0'
         : p_row.simp === 'diff' ? '#e08080' : '';
     }
     function simpText(p_row) {
@@ -318,21 +325,16 @@ createApp({
       if (v_editKey.value === null) return;
       const v_row = v_rows.value.find(v_item => v_item.key === v_editKey.value);
       if (v_row) {
-        // 与简中相同也复制实际值入库（dirty 保存语义）
-        v_dirty.set(v_row.key, v_editText.value);
-        persistLocal();
+        // 只有文本与当前值不同时才标 dirty（避免无改动显示红点）
+        const v_current = curFix(v_row) ?? v_row.zh_cn ?? '';
+        if (v_editText.value !== v_current) {
+          v_dirty.set(v_row.key, v_editText.value);
+          persistLocal();
+        }
       }
       v_editKey.value = null;
     }
     function cancelEdit() { v_editKey.value = null; }
-    // blur 延迟判定：焦点仍在编辑面板内（如点击英文参考区）不提交
-    function onEditBlur() {
-      setTimeout(() => {
-        const v_wrap = document.querySelector('.edit-wrap');
-        if (v_wrap && v_wrap.contains(document.activeElement)) return;
-        commitEdit();
-      }, 0);
-    }
     function restoreRow(p_row) {
       // 还原 = 第 4 列复制回简中值
       v_dirty.set(p_row.key, p_row.zh_cn ?? '');
@@ -403,6 +405,26 @@ createApp({
       v_batchKeys.value = null;
       persistLocal();
       toastMsg('已还原本次批量替换');
+    }
+
+    /* ---------------- 词表 ---------------- */
+    async function openDict() {
+      v_modal.dict = true;
+      await loadDict();
+    }
+    async function loadDict() {
+      const v_res = await fetch('/api/simp_dict');
+      const v_data = await v_res.json();
+      v_dictRows.value = v_data.rows || [];
+    }
+    async function delDict(p_row) {
+      const v_res = await fetch('/api/simp_dict/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tw: p_row.tw, cn: p_row.cn }),
+      });
+      if (v_res.ok) { toastMsg('已删除词表规则'); await loadDict(); await reload(); }
+      else { toastMsg('删除失败'); }
     }
 
     /* ---------------- 导入 / 同步 ---------------- */
@@ -568,13 +590,14 @@ createApp({
       v_onlyNew, v_showObsolete, v_onlyPending, v_hasTw, v_hasCn, v_gridCols,
       v_searchCols, colsAny, colsSummary, setCols,
       v_editKey, v_editText, v_rep, v_repPreview, v_replaceHistory, v_histMap,
-      v_modal, v_syncSummary, v_importTitle, v_importMsg, v_exportResult, v_toast,
+      v_modal, v_syncSummary, v_importTitle, v_importMsg, v_exportResult, v_dictRows, v_toast,
       v_scrollEl, v_searchEl, v_fileEl, v_totalHeight,
       v_filtered, v_pendingCount, v_viewRows,
       onScroll, doSearch, clearFilter,
       rowClass, cellHtml, fixCellHtml, cnTip, curFix, simpColor, simpText,
-      startEdit, commitEdit, cancelEdit, onEditBlur, restoreRow,
+      startEdit, commitEdit, cancelEdit, restoreRow,
       openReplace, computeRepPreview, applyReplace, undoBatch,
+      openDict, loadDict, delDict,
       pickFile, onFile, migrateFix, disp, save, doExport,
     };
   },

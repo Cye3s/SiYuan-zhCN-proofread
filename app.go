@@ -101,6 +101,10 @@ func (v_app *App) ServeHTTP(p_writer http.ResponseWriter, p_req *http.Request) {
 		v_app.handleMigrate(p_writer, p_req)
 	case p_req.URL.Path == "/api/export_content" && p_req.Method == "POST":
 		v_app.handleExportContent(p_writer)
+	case p_req.URL.Path == "/api/simp_dict" && p_req.Method == "GET":
+		v_app.handleListSimpDict(p_writer)
+	case p_req.URL.Path == "/api/simp_dict/delete" && p_req.Method == "POST":
+		v_app.handleDeleteSimpDict(p_writer, p_req)
 	default:
 		http.NotFound(p_writer, p_req)
 	}
@@ -166,11 +170,16 @@ func (v_app *App) handleEntries(p_writer http.ResponseWriter) {
 }
 
 // keyOrder 简中文件保序展平后的 key 顺序（表格按 json 中顺序排序用）
+// 仅导入 zh-TW 时 fallback 到 zh_tw_json 的 key 顺序
 func (v_app *App) keyOrder() map[string]int {
 	v_order := map[string]int{}
 	v_json, v_ok, v_err := v_app.v_store.ZhCNJSON()
 	if v_err != nil || !v_ok {
-		return v_order
+		// fallback：简中未导入时用繁体文件顺序
+		v_json, v_ok, v_err = v_app.v_store.ZhTWJSON()
+		if v_err != nil || !v_ok {
+			return v_order
+		}
 	}
 	v_root, v_err := ParseOrdered([]byte(v_json))
 	if v_err != nil {
@@ -222,6 +231,7 @@ func (v_app *App) tw2sp() *opencc.OpenCC {
 }
 
 // simpClass 三色判定（带缓存）：
+// 优先查自定义词表（校对保存时自动捕获），命中跳过 OpenCC；未命中走 OpenCC
 //
 //	same  字面转换即相同（淡蓝：简繁字面相同，直转残留重点）
 //	match 字面不同、按台湾用词转换后一致（淡黄：无需校对）
@@ -237,6 +247,14 @@ func (v_app *App) simpClass(p_cn, p_tw string) string {
 	if v_ok {
 		return v_hit
 	}
+	// 1. 自定义词表优先
+	if v_mode := v_app.v_store.LookupSimpDict(p_tw, p_cn); v_mode != "" {
+		v_app.v_simpMu.Lock()
+		v_app.v_simpCache[v_key] = v_mode
+		v_app.v_simpMu.Unlock()
+		return v_mode
+	}
+	// 2. OpenCC 判定
 	v_state := "diff"
 	if v_out, v_err := v_app.tw2s().Convert(p_tw); v_err == nil && v_out == p_cn {
 		v_state = "same"
@@ -276,7 +294,7 @@ func (v_app *App) handleImport(p_writer http.ResponseWriter, p_req *http.Request
 	}
 	switch v_req.Role {
 	case "tw":
-		v_count, v_err := v_app.v_store.ImportTw(Flatten(v_root, "", map[string]string{}))
+		v_count, v_err := v_app.v_store.ImportTw(v_root, v_req.Content, Flatten(v_root, "", map[string]string{}))
 		if v_err != nil {
 			writeJSON(p_writer, 500, map[string]string{"detail": v_err.Error()})
 			return
@@ -301,6 +319,21 @@ func (v_app *App) handleImport(p_writer http.ResponseWriter, p_req *http.Request
 	}
 }
 
+// classifySimp 用 OpenCC 判定繁体与简中的关系（词表捕获回调）
+// 注意：参数顺序是 (tw, fix)，判定 fix 是否为 tw 的简体或大陆用词转换结果
+func (v_app *App) classifySimp(p_tw, p_fix string) string {
+	if p_tw == "" || p_fix == "" {
+		return ""
+	}
+	if v_out, v_err := v_app.tw2s().Convert(p_tw); v_err == nil && v_out == p_fix {
+		return "same"
+	}
+	if v_out2, v_err2 := v_app.tw2sp().Convert(p_tw); v_err2 == nil && v_out2 == p_fix {
+		return "match"
+	}
+	return "diff"
+}
+
 func (v_app *App) handleSave(p_writer http.ResponseWriter, p_req *http.Request) {
 	var v_req struct {
 		Rows []SaveRow `json:"rows"`
@@ -309,11 +342,15 @@ func (v_app *App) handleSave(p_writer http.ResponseWriter, p_req *http.Request) 
 		writeJSON(p_writer, 400, map[string]string{"detail": "请求解析失败: " + v_err.Error()})
 		return
 	}
-	v_count, v_err := v_app.v_store.SaveRows(v_req.Rows)
+	v_count, v_err := v_app.v_store.SaveRows(v_req.Rows, v_app.classifySimp)
 	if v_err != nil {
 		writeJSON(p_writer, 400, map[string]string{"detail": v_err.Error()})
 		return
 	}
+	// 清 simpCache，让词表新规则在重算时生效
+	v_app.v_simpMu.Lock()
+	v_app.v_simpCache = map[string]string{}
+	v_app.v_simpMu.Unlock()
 	writeJSON(p_writer, 200, map[string]any{"ok": true, "saved": v_count})
 }
 
@@ -443,4 +480,38 @@ func (v_app *App) ExportWithDialog() (map[string]any, error) {
 		"missing_keys":         v_stats.MissingKeys,
 		"placeholder_warnings": v_stats.PlaceholderWarnings,
 	}, nil
+}
+
+// handleListSimpDict 词表列表（前端管理用）
+func (v_app *App) handleListSimpDict(p_writer http.ResponseWriter) {
+	v_list, v_err := v_app.v_store.ListSimpDict()
+	if v_err != nil {
+		writeJSON(p_writer, 500, map[string]string{"detail": v_err.Error()})
+		return
+	}
+	if v_list == nil {
+		v_list = []map[string]string{}
+	}
+	writeJSON(p_writer, 200, map[string]any{"rows": v_list})
+}
+
+// handleDeleteSimpDict 删除词表规则
+func (v_app *App) handleDeleteSimpDict(p_writer http.ResponseWriter, p_req *http.Request) {
+	var v_req struct {
+		Tw string `json:"tw"`
+		Cn string `json:"cn"`
+	}
+	if v_err := readBody(p_req, &v_req); v_err != nil {
+		writeJSON(p_writer, 400, map[string]string{"detail": "请求解析失败"})
+		return
+	}
+	if v_err := v_app.v_store.DeleteSimpDict(v_req.Tw, v_req.Cn); v_err != nil {
+		writeJSON(p_writer, 500, map[string]string{"detail": v_err.Error()})
+		return
+	}
+	// 清 simpCache 让重算生效
+	v_app.v_simpMu.Lock()
+	v_app.v_simpCache = map[string]string{}
+	v_app.v_simpMu.Unlock()
+	writeJSON(p_writer, 200, map[string]any{"ok": true})
 }
