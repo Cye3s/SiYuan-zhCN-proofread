@@ -40,13 +40,15 @@
 
 依赖：Go 1.21+（纯 Go 实现，无 CGO，SQLite 用 modernc.org/sqlite 驱动；简繁判定用 longbridgeapp/opencc，词典编译期内嵌、离线可用）
 
-```bash
-go build -tags desktop,production -trimpath -ldflags "-s -w -H windowsgui" -o SiYuan-zhCN-proofread.exe .
+打包脚本 `build_go.ps1`（PowerShell，自动生成图标资源并编译）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build_go.ps1
 ```
 
+- `app.ico` 与脚本同目录；`winres.json` 定义双图标组（资源管理器 + 窗口标题栏）与版本号
 - **必须带 `-tags desktop,production`**：Wails 构建标签，缺失会启动弹 Error 框
-- `-H windowsgui`：隐藏控制台黑框
-- 图标打包：双击 `build_go.bat`（自动生成图标资源并编译，`app.ico` 需与脚本同目录）
+- 首次运行如遇执行策略限制：`Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
 - 验证：`go test ./...` 含语言文件保序往返测试（解析→序列化逐字节一致）
 
 ## 数据库结构（可用 DBeaver 查看/更新）
