@@ -18,7 +18,7 @@ body { font: 13px/1.5 "Segoe UI", "Microsoft YaHei", sans-serif; color: #222; ba
 .row.stale { box-shadow: inset 4px 0 0 #f0a030; } /* 简中已改·待重核：橙色左条，不占行背景让位四色 */
 .row.isnew { background: #e8f7e8; }
 .row.isnew:hover { background: #ddf2dd; }
-/* 简繁关系三色：字面相同（淡黄·校对重点）/ 词汇转换一致（淡蓝·无需校对）/ 需人工校正（淡红） */
+/* 简繁关系三色：简繁相同（淡黄·校对重点）/ OpenCC 转换一致（淡蓝·无需校对）/ 需人工校正（淡红） */
 .row.simp-same { background: #fff6cc; }
 .row.simp-same:hover { background: #ffefb0; }
 .row.simp-match { background: #e8f1fd; }

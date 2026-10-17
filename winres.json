@@ -33,15 +33,15 @@
     "#1": {
       "0409": {
         "fixed": {
-          "file_version": "1.0.1.0",
-          "product_version": "1.0.1.0"
+          "file_version": "1.0.2.0",
+          "product_version": "1.0.2.0"
         },
         "info": {
           "0409": {
             "FileDescription": "思源简中校对 SiYuan-zhCN-proofread",
-            "FileVersion": "1.0.1",
+            "FileVersion": "1.0.2",
             "ProductName": "SiYuan-zhCN-proofread",
-            "ProductVersion": "1.0.1"
+            "ProductVersion": "1.0.2"
           }
         }
       }

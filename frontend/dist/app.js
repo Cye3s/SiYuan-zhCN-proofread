@@ -284,7 +284,7 @@ createApp({
         : p_row.simp === 'diff' ? '#e08080' : '';
     }
     function simpText(p_row) {
-      return p_row.simp === 'same' ? '简繁字面相同'
+      return p_row.simp === 'same' ? '简繁相同'
         : p_row.simp === 'match' ? 'OpenCC 转换一致·无需校对'
         : p_row.simp === 'diff' ? '简繁转换不一致·需人工校正' : '';
     }

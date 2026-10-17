@@ -71,8 +71,8 @@
   <div class="btnrow center">
     <div class="legend">
       <span><i class="sw sw-new"></i>新版新增</span>
-      <span><i class="sw sw-same"></i>简繁字面相同</span>
-      <span><i class="sw sw-match"></i>转换一致·无需校对</span>
+      <span><i class="sw sw-same"></i>简繁相同</span>
+      <span><i class="sw sw-match"></i>OpenCC 转换一致·无需校对</span>
       <span><i class="sw sw-diff"></i>需人工校正</span>
       <span><i class="sw sw-stale"></i>简中已改·待重核</span>
     </div>
@@ -127,13 +127,13 @@
   <div class="mask" v-if="v_modal.dict">
     <div class="modal">
       <h3>简繁词表（校对保存时自动捕获）</h3>
-      <div class="kv">保存校对值时，若简繁关系从“需校正”变为“字面相同”或“转换一致”，该繁简对会自动记入词表，下次同类行自动命中。可手动删除不需的规则。</div>
+      <div class="kv">保存校对值时，若简繁关系从“需校正”变为“简繁相同”或“转换一致”，该繁简对会自动记入词表，下次同类行自动命中。可手动删除不需的规则。</div>
       <div class="dict-list" v-if="v_dictRows.length">
         <div class="dict-item" v-for="v_row in v_dictRows">
           <span class="dict-tw">{{ v_row.tw }}</span>
           <span class="dict-arrow">→</span>
           <span class="dict-cn">{{ v_row.cn }}</span>
-          <span class="dict-mode" :class="'mode-' + v_row.mode">{{ v_row.mode === 'same' ? '字面相同' : '转换一致' }}</span>
+          <span class="dict-mode" :class="'mode-' + v_row.mode">{{ v_row.mode === 'same' ? '简繁相同' : '转换一致' }}</span>
           <button class="link-btn" @click="delDict(v_row)">删除</button>
         </div>
       </div>

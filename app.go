@@ -233,8 +233,8 @@ func (v_app *App) tw2sp() *opencc.OpenCC {
 // simpClass 三色判定（带缓存）：
 // 优先查自定义词表（校对保存时自动捕获），命中跳过 OpenCC；未命中走 OpenCC
 //
-//	same  字面转换即相同（淡蓝：简繁字面相同，直转残留重点）
-//	match 字面不同、按台湾用词转换后一致（淡黄：无需校对）
+//	same  简繁字符串完全相同（淡黄：校对重点）
+//	match 字面不同、按台湾用词转换后一致（淡蓝：OpenCC 转换一致·无需校对）
 //	diff  两种转换都不同（淡红：需人工校正）
 func (v_app *App) simpClass(p_cn, p_tw string) string {
 	if p_cn == "" || p_tw == "" {
